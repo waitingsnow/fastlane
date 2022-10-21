@@ -130,6 +130,7 @@ module Spaceship
       result = send_shared_login_request(user, password)
 
       store_cookie
+      store_x_apple_id_session_id
 
       return result
     end

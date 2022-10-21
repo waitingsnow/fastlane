@@ -358,6 +358,7 @@ If it is, please open an issue at https://github.com/fastlane/fastlane/issues/ne
       # correct DES... cookie
 
       self.store_cookie
+      self.store_x_apple_id_session_id
     end
 
     # Responsible for setting all required header attributes for the requests

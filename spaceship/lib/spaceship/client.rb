@@ -199,13 +199,14 @@ module Spaceship
       self.new(cookie: another_client.instance_variable_get(:@cookie), current_team_id: another_client.team_id)
     end
 
-    def initialize(cookie: nil, current_team_id: nil, csrf_tokens: nil, timeout: nil)
+    def initialize(cookie: nil, current_team_id: nil, csrf_tokens: nil, x_apple_id_session_id: nil, timeout: nil)
       options = {
        request: {
           timeout:       (ENV["SPACESHIP_TIMEOUT"] || timeout || 300).to_i,
           open_timeout:  (ENV["SPACESHIP_TIMEOUT"] || timeout || 300).to_i
         }
       }
+      @x_apple_id_session_id = x_apple_id_session_id
       @current_team_id = current_team_id
       @csrf_tokens = csrf_tokens
       @cookie = cookie || HTTP::CookieJar.new
@@ -298,6 +299,44 @@ module Spaceship
           dir_parts = File.split(dir)
           if directory_accessible?(File.expand_path(dir_parts.first))
             path = File.expand_path(File.join(dir, self.user, "cookie"))
+            break
+          end
+        end
+      end
+
+      return path
+    end
+
+    #####################################################
+    # @!group Session Cookie
+    #####################################################
+
+    ##
+    # Return the session cookie.
+    #
+    # @return (String) the cookie-string in the RFC6265 format: https://tools.ietf.org/html/rfc6265#section-4.2.1
+    def x_apple_id_session_id
+      @x_apple_id_session_id
+    end
+
+    def store_x_apple_id_session_id(path: nil)
+      path ||= persistent_x_apple_id_session_id_path
+      FileUtils.mkdir_p(File.expand_path("..", path))
+
+      # Cache the session locally
+      File.write(path, @x_apple_id_session_id)
+    end
+
+    # Returns preferred path for storing cookie
+    # for two step verification.
+    def persistent_x_apple_id_session_id_path
+      if ENV["SPACESHIP_SESSION_PATH"]
+        path = File.expand_path(File.join(ENV["SPACESHIP_SESSION_PATH"], "spaceship", self.user, "session"))
+      else
+        [File.join(self.fastlane_user_dir, "spaceship"), "~/.spaceship", "/var/tmp/spaceship", "#{Dir.tmpdir}/spaceship"].each do |dir|
+          dir_parts = File.split(dir)
+          if directory_accessible?(File.expand_path(dir_parts.first))
+            path = File.expand_path(File.join(dir, self.user, "session"))
             break
           end
         end
@@ -412,6 +451,19 @@ module Spaceship
     # More context on why this change was necessary https://github.com/fastlane/fastlane/pull/11108
     #
     def has_valid_session
+      #
+      # The user can pass the session via environment variable (Mainly used in CI environments)
+      if load_x_apple_id_session_id_from_file
+      else
+        return false
+      end
+      #
+      # The user can pass the session via environment variable (Mainly used in CI environments)
+      if load_x_apple_id_session_id_from_env
+      else
+        return false
+      end
+
       # If there was a successful manual login before, we have a session on disk
       if load_session_from_file
         # Check if the session is still valid here
@@ -514,6 +566,7 @@ module Spaceship
       when 409
         # 2 step/factor is enabled for this account, first handle that
         handle_two_step_or_factor(response)
+        store_x_apple_id_session_id
         # and then get the olympus session
         fetch_olympus_session
         return true
@@ -525,6 +578,7 @@ module Spaceship
 
           if try_upgrade_2fa_later(response)
             store_cookie
+            store_x_apple_id_session_id
             fetch_olympus_session
             return true
           end
@@ -605,7 +659,7 @@ module Spaceship
     def load_session_from_file
       begin
         if File.exist?(persistent_cookie_path)
-          puts("Loading session from '#{persistent_cookie_path}'") if Spaceship::Globals.verbose?
+          puts("Loading cookie from '#{persistent_cookie_path}'") if Spaceship::Globals.verbose?
           @cookie.load(persistent_cookie_path)
           return true
         end
@@ -626,6 +680,42 @@ module Spaceship
 
       begin
         @cookie.load(file.path)
+      rescue => ex
+        puts("Error loading session from environment")
+        puts("Make sure to pass the session in a valid format")
+        raise ex
+      ensure
+        file.unlink
+      end
+    end
+
+    def load_x_apple_id_session_id_from_file
+      begin
+        if File.exist?(persistent_x_apple_id_session_id_path)
+          puts("Loading session from '#{persistent_x_apple_id_session_id_path}'") if Spaceship::Globals.verbose?
+          @x_apple_id_session_id = File.read(persistent_x_apple_id_session_id_path)
+          return true
+        end
+      rescue => ex
+        puts(ex.to_s)
+        puts("Continuing with normal login.")
+      end
+      return false
+    end
+
+    def load_x_apple_id_session_id_from_env
+      return if self.class.spaceship_session_env.to_s.length == 0
+      puts("Loading session from environment variable") if Spaceship::Globals.verbose?
+
+      file = Tempfile.new('x_apple_id_session_id.yml')
+      file.write(self.class.spaceship_session_env.gsub("\\n", "\n"))
+      file.close
+
+      begin
+        if File.exist?(file)
+          puts("Loading session from '#{file}'") if Spaceship::Globals.verbose?
+          @x_apple_id_session_id = File.read(file)
+        end
       rescue => ex
         puts("Error loading session from environment")
         puts("Make sure to pass the session in a valid format")

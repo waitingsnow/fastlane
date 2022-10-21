@@ -16,6 +16,7 @@ module Spaceship
       widget_key_location = response.headers['location']
       uri    = URI.parse(widget_key_location)
       params = CGI.parse(uri.query)
+      @x_apple_id_session_id = response["x-apple-id-session-id"]
 
       widget_key = params.dig('widgetKey', 0)
       if widget_key.nil?
